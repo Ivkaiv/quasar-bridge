@@ -50,6 +50,7 @@ type MusicQueue struct {
 	base    *url.URL
 	prefix  string
 	http    *http.Client
+	reader  *WebReader
 	mu      sync.Mutex
 	entries map[string]musicQueueEntry
 	active  chan struct{}
@@ -73,7 +74,7 @@ func NewMusicQueue(base string, reader *WebReader) (*MusicQueue, error) {
 		}
 		return nil
 	}}
-	return &MusicQueue{base: u, prefix: strings.TrimRight(u.Path, "/") + "/music-stream/", http: client, entries: map[string]musicQueueEntry{}, active: make(chan struct{}, 4), now: time.Now}, nil
+	return &MusicQueue{base: u, prefix: strings.TrimRight(u.Path, "/") + "/music-stream/", http: client, reader: reader, entries: map[string]musicQueueEntry{}, active: make(chan struct{}, 4), now: time.Now}, nil
 }
 
 func (q *MusicQueue) Register(tracks []WebLink) (string, error) {
@@ -82,8 +83,8 @@ func (q *MusicQueue) Register(tracks []WebLink) (string, error) {
 	}
 	for _, track := range tracks {
 		u, err := url.Parse(track.URL)
-		if err != nil || len(track.URL) > 4096 || validateWebURL(u) != nil || mediaExtension(track.URL) != ".mp3" {
-			return "", errors.New("music queue tracks must be public HTTP/HTTPS MP3 URLs")
+		if err != nil || len(track.URL) > 4096 || validateWebURL(u) != nil || !queueableTrack(track.URL) {
+			return "", errors.New("music queue tracks must be public HTTP/HTTPS MP3 URLs or zaycev.net playback handles")
 		}
 	}
 	q.mu.Lock()
@@ -196,6 +197,18 @@ func (q *MusicQueue) streamTrack(ctx context.Context, w http.ResponseWriter, out
 	}
 	if remaining <= 0 {
 		return 0, errors.New("music queue exceeds byte limit")
+	}
+	if hash := zaycevPlayHash(raw); hash != "" {
+		if q.reader == nil {
+			return 0, errors.New("music metadata reader is unavailable")
+		}
+		resolved, err := q.reader.resolveZaycev(ctx, hash)
+		if err != nil {
+			return 0, err
+		}
+		if u, err = url.Parse(resolved); err != nil || validateWebURL(u) != nil {
+			return 0, errors.New("music track URL is blocked")
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

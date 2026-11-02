@@ -13,7 +13,7 @@ import (
 )
 
 func musicDefinition() llm.Tool {
-	return definition("play_music", "Включить музыку на текущей колонке с публичного сайта или по прямой ссылке на аудио. source — точный URL страницы, сайта или аудиофайла из запроса пользователя. Сам находит аудиоссылки в HTML и данных плеера, при необходимости открывает музыкальный раздел сайта и ставит найденные MP3 в очередь. Не придумывай адреса файлов.", map[string]any{"source": map[string]string{"type": "string"}}, []string{"source"})
+	return definition("play_music", "Включить музыку на текущей колонке с публичного сайта или по прямой ссылке на аудио. source — точный URL страницы, сайта или аудиофайла из запроса пользователя. Сам находит аудиоссылки в HTML и данных плеера, при необходимости открывает музыкальный раздел сайта и ставит найденные MP3 в очередь. Сайт «Зайцев нет» — https://zaycev.net/; для исполнителя или песни с этого сайта передай https://zaycev.net/search?query_search=<исполнитель и/или название в именительном падеже, URL-кодирование>. Не придумывай адреса файлов.", map[string]any{"source": map[string]string{"type": "string"}}, []string{"source"})
 }
 
 func (t *Tools) playMusic(ctx context.Context, args string) (any, error) {
@@ -32,7 +32,11 @@ func (t *Tools) playMusic(ctx context.Context, args string) (any, error) {
 		return nil, errors.New("play_music requires a current speaker request")
 	}
 	tracks := []WebLink{{URL: u.String()}}
-	if mediaExtension(raw) == "" {
+	if zaycevSite(u) && mediaExtension(raw) == "" && zaycevPlayHash(raw) == "" {
+		if tracks, err = t.WebReader.zaycevTracks(ctx, u.String()); err != nil {
+			return nil, err
+		}
+	} else if mediaExtension(raw) == "" && zaycevPlayHash(raw) == "" {
 		page, err := t.WebReader.Read(ctx, raw)
 		if err != nil {
 			return nil, err

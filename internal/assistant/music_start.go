@@ -20,10 +20,15 @@ func (t *Tools) CanStartMusic(text string) bool {
 }
 
 func musicStartSource(text string) string {
-	if !webaddress.MusicRequest(text) || !musicStartCommand.MatchString(dialogue.Normalize(text)) {
+	plainZaycev := zaycevSpokenPlain(text)
+	// The site-only allowlist excludes negations and artist/song names.
+	if (!webaddress.MusicRequest(text) && !plainZaycev) || !musicStartCommand.MatchString(dialogue.Normalize(text)) {
 		return ""
 	}
 	source := strings.TrimRight(explicitURL.FindString(webaddress.Normalize(text)), ".,!?;:)]}")
+	if source == "" && plainZaycev {
+		source = "https://zaycev.net/"
+	}
 	u, err := url.Parse(source)
 	if err != nil || len(source) > 2048 || validateWebURL(u) != nil || u.Fragment != "" {
 		return ""
