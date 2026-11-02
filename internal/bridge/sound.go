@@ -65,10 +65,13 @@ func (n *Native) takeSound(p *nativeRequest) []*directives.TDirective {
 func (n *Native) hasSilentPlayback(p *nativeRequest) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return p.soundDirective != nil && p.soundRequest != nil && (p.soundRequest.URL != "" || p.soundRequest.Command != "")
+	return p.soundDirective != nil && p.soundRequest != nil && (p.soundRequest.URL != "" || p.soundRequest.Command != "" || p.soundRequest.Instead)
 }
 
 func makeSoundDirective(request sound.Request) (*directives.TDirective, error) {
+	if request.Instead && (request.Sound == "" || request.URL != "" || request.Command != "" || request.StreamID != "" || request.OffsetMS != 0) {
+		return nil, errors.New("speech replacement requires a stored sound")
+	}
 	if request.Command != "" {
 		if (request.Command != "pause" && request.Command != "stop") || request.URL != "" || request.Sound != "" || request.StreamID != "" || request.OffsetMS != 0 {
 			return nil, errors.New("invalid playback control")
@@ -109,6 +112,10 @@ func makeSoundDirective(request sound.Request) (*directives.TDirective, error) {
 		stored = fileplayer.TAudioFilePlayerCapability_NotificationSound
 	case "success":
 		stored = fileplayer.TAudioFilePlayerCapability_AliceIoTSoundsDone
+	case "turn_on":
+		stored = fileplayer.TAudioFilePlayerCapability_AliceIoTSoundsTurnOn
+	case "turn_off":
+		stored = fileplayer.TAudioFilePlayerCapability_AliceIoTSoundsTurnOff
 	case "error":
 		stored = fileplayer.TAudioFilePlayerCapability_SpotterError
 	case "timer":

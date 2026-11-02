@@ -15,6 +15,9 @@ type Request struct {
 	StreamID string `json:"stream_id,omitempty"`
 	Title    string `json:"title,omitempty"`
 	OffsetMS int64  `json:"offset_ms,omitzero"`
+	// Instead replaces speech with a stored confirmation sound. It is an internal
+	// request option; arbitrary play_sound tool arguments cannot enable it.
+	Instead bool `json:"-"`
 }
 
 type PlaybackState struct {
