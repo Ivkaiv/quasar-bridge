@@ -13,6 +13,9 @@
   "llm_max_output_tokens": 4096,
   "llm_hosted_tools": [],
   "home_warm_area": "",
+  "home_trust_mcp_visibility": false,
+  "home_direct_commands": false,
+  "home_confirmation_sounds": false,
   "listen_after_reply": true,
   "airplay": {
     "disabled": false
