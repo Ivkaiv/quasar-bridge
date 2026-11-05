@@ -277,6 +277,9 @@ func (e *Engine) Decide(ctx context.Context, text string) (decision RouteDecisio
 	if !p.classifierEnabled {
 		return RouteDecision{Route: p.defaultRoute, Source: "default"}
 	}
+	if nativePlaybackCommand(ctx, text, len(snapshot.Messages) > 0) {
+		return RouteDecision{Route: "yandex", Source: "native_playback"}
+	}
 	failed := RouteDecision{Route: p.classifier.OnError, Source: "classifier_error"}
 	if e.LLM == nil {
 		return failed
