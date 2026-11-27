@@ -24,6 +24,9 @@ func musicStartSource(text string) string {
 		return ""
 	}
 	source := strings.TrimRight(explicitURL.FindString(webaddress.Normalize(text)), ".,!?;:)]}")
+	if source == "" && zaycevSpoken(text) && zaycevSpokenPlain(text) {
+		source = "https://zaycev.net/"
+	}
 	u, err := url.Parse(source)
 	if err != nil || len(source) > 2048 || validateWebURL(u) != nil || u.Fragment != "" {
 		return ""

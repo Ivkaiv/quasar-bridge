@@ -82,7 +82,7 @@ func (q *MusicQueue) Register(tracks []WebLink) (string, error) {
 	}
 	for _, track := range tracks {
 		u, err := url.Parse(track.URL)
-		if err != nil || len(track.URL) > 4096 || validateWebURL(u) != nil || mediaExtension(track.URL) != ".mp3" {
+		if err != nil || len(track.URL) > 4096 || validateWebURL(u) != nil || !queueableTrack(track.URL) {
 			return "", errors.New("music queue tracks must be public HTTP/HTTPS MP3 URLs")
 		}
 	}
@@ -196,6 +196,15 @@ func (q *MusicQueue) streamTrack(ctx context.Context, w http.ResponseWriter, out
 	}
 	if remaining <= 0 {
 		return 0, errors.New("music queue exceeds byte limit")
+	}
+	if hash := zaycevPlayHash(raw); hash != "" {
+		resolved, err := resolveZaycev(ctx, q.http, hash)
+		if err != nil {
+			return 0, err
+		}
+		if u, err = url.Parse(resolved); err != nil {
+			return 0, errors.New("invalid music track URL")
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

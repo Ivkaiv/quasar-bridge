@@ -50,7 +50,7 @@ func (m *MusicPlayback) Start(ctx context.Context, tracks []WebLink) error {
 	if len(tracks) == 0 {
 		return errors.New("music requires at least one track")
 	}
-	queued := mediaExtension(tracks[0].URL) == ".mp3"
+	queued := queueableTrack(tracks[0].URL)
 	stream := tracks[0].URL
 	if queued {
 		if m.queue == nil {

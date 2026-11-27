@@ -113,7 +113,9 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 			break
 		}
 	}
-	if _, err := u.installState(); err != nil {
+	if err := u.allowInstall(); err != nil {
+		status.InstallUnavailableReason = err.Error()
+	} else if _, err := u.installState(); err != nil {
 		status.InstallUnavailableReason = err.Error()
 	} else {
 		status.InstallSupported = true
@@ -185,6 +187,9 @@ func standaloneState(executable, configPath string) (string, error) {
 }
 
 func (u *Updater) Install(ctx context.Context) (InstallResult, error) {
+	if err := u.allowInstall(); err != nil {
+		return InstallResult{}, err
+	}
 	state, err := u.installState()
 	if err != nil {
 		return InstallResult{}, err

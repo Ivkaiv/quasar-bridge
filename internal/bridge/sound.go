@@ -65,7 +65,7 @@ func (n *Native) takeSound(p *nativeRequest) []*directives.TDirective {
 func (n *Native) hasSilentPlayback(p *nativeRequest) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return p.soundDirective != nil && p.soundRequest != nil && (p.soundRequest.URL != "" || p.soundRequest.Command != "")
+	return p.soundDirective != nil && p.soundRequest != nil && (p.soundRequest.URL != "" || p.soundRequest.Command != "" || p.soundRequest.Instead)
 }
 
 func makeSoundDirective(request sound.Request) (*directives.TDirective, error) {
@@ -113,6 +113,12 @@ func makeSoundDirective(request sound.Request) (*directives.TDirective, error) {
 		stored = fileplayer.TAudioFilePlayerCapability_SpotterError
 	case "timer":
 		stored = fileplayer.TAudioFilePlayerCapability_Timer
+	// ivkaiv: Alice's own smart-home on/off chimes. Station 2 has these files
+	// (sounds/common/alice-iot-sounds-turn-*.opus); "success" (Done) has none.
+	case "turn_on":
+		stored = fileplayer.TAudioFilePlayerCapability_AliceIoTSoundsTurnOn
+	case "turn_off":
+		stored = fileplayer.TAudioFilePlayerCapability_AliceIoTSoundsTurnOff
 	default:
 		return nil, errors.New("unknown sound")
 	}

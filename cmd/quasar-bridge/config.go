@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"unicode"
 
 	"quasarbridge/internal/assistant"
 	"quasarbridge/internal/bridge"
@@ -25,29 +26,32 @@ type progressConfig struct {
 }
 
 type config struct {
-	AirPlay            airPlayConfig        `json:"airplay"`
-	DialogueContext    dialogue.Config      `json:"dialogue_context"`
-	LocalProgress      progressConfig       `json:"local_progress"`
-	AssistantTools     assistant.Config     `json:"assistant_tools"`
-	ConversationLog    journal.Config       `json:"conversation_log"`
-	Listen             string               `json:"listen"`
-	Upstream           string               `json:"upstream"`
-	TLSCert            string               `json:"tls_cert"`
-	TLSKey             string               `json:"tls_key"`
-	AllowedIPs         []string             `json:"allowed_ips"`
-	Mode               string               `json:"mode"`
-	LLMBaseURL         string               `json:"llm_base_url"`
-	LLMModel           string               `json:"llm_model"`
-	LLMAPI             string               `json:"llm_api"`
-	LLMChatGPTAuthFile string               `json:"llm_chatgpt_auth_file"`
-	LLMReasoningEffort string               `json:"llm_reasoning_effort"`
-	LLMMaxOutputTokens int                  `json:"llm_max_output_tokens"`
-	LLMHostedTools     []string             `json:"llm_hosted_tools"`
-	LLMChatParameters  map[string]any       `json:"llm_chat_parameters"`
-	LLMStripPrefixes   []string             `json:"llm_strip_prefixes"`
-	HomeWarmArea       string               `json:"home_warm_area"`
-	ListenAfterReply   bool                 `json:"listen_after_reply"`
-	Routing            bridge.RoutingConfig `json:"routing"`
+	AirPlay                airPlayConfig        `json:"airplay"`
+	DialogueContext        dialogue.Config      `json:"dialogue_context"`
+	LocalProgress          progressConfig       `json:"local_progress"`
+	AssistantTools         assistant.Config     `json:"assistant_tools"`
+	ConversationLog        journal.Config       `json:"conversation_log"`
+	Listen                 string               `json:"listen"`
+	Upstream               string               `json:"upstream"`
+	TLSCert                string               `json:"tls_cert"`
+	TLSKey                 string               `json:"tls_key"`
+	AllowedIPs             []string             `json:"allowed_ips"`
+	Mode                   string               `json:"mode"`
+	LLMBaseURL             string               `json:"llm_base_url"`
+	LLMModel               string               `json:"llm_model"`
+	LLMAPI                 string               `json:"llm_api"`
+	LLMChatGPTAuthFile     string               `json:"llm_chatgpt_auth_file"`
+	LLMReasoningEffort     string               `json:"llm_reasoning_effort"`
+	LLMMaxOutputTokens     int                  `json:"llm_max_output_tokens"`
+	LLMHostedTools         []string             `json:"llm_hosted_tools"`
+	LLMChatParameters      map[string]any       `json:"llm_chat_parameters"`
+	LLMStripPrefixes       []string             `json:"llm_strip_prefixes"`
+	HomeWarmArea           string               `json:"home_warm_area"`
+	ListenAfterReply       bool                 `json:"listen_after_reply"`
+	Routing                bridge.RoutingConfig `json:"routing"`
+	HomeDefaultArea        string               `json:"home_default_area"`
+	HomeTrustMCPVisibility bool                 `json:"home_trust_mcp_visibility"`
+	HomeDirectCommands     bool                 `json:"home_direct_commands"`
 }
 
 func readConfig(path string) (config, error) {
@@ -76,6 +80,7 @@ func parseConfig(raw []byte, modelOptional bool) (config, error) {
 		"QUASAR_LLM_MODEL": &cfg.LLMModel, "QUASAR_HOME_WARM_AREA": &cfg.HomeWarmArea,
 		"QUASAR_LLM_API": &cfg.LLMAPI, "QUASAR_LLM_REASONING_EFFORT": &cfg.LLMReasoningEffort,
 		"QUASAR_LLM_CHATGPT_AUTH_FILE": &cfg.LLMChatGPTAuthFile,
+		"QUASAR_HOME_DEFAULT_AREA":     &cfg.HomeDefaultArea,
 	} {
 		if value, ok := os.LookupEnv(name); ok {
 			*target = value
@@ -209,6 +214,10 @@ func parseConfig(raw []byte, modelOptional bool) (config, error) {
 	}
 	if _, err := bridge.CompileRouting(cfg.Routing); err != nil {
 		return cfg, err
+	}
+	cfg.HomeDefaultArea = strings.TrimSpace(cfg.HomeDefaultArea)
+	if len([]rune(cfg.HomeDefaultArea)) > 128 || strings.IndexFunc(cfg.HomeDefaultArea, unicode.IsControl) >= 0 {
+		return cfg, errors.New("home_default_area must be a single room name up to 128 characters")
 	}
 	return cfg, nil
 }

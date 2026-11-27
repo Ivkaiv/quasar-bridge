@@ -200,7 +200,7 @@ func main() {
 	var musicQueue *assistant.MusicQueue
 	var hc *home.Controller
 	if endpoint := os.Getenv("QUASAR_HOME_MCP_URL"); endpoint != "" {
-		hc = &home.Controller{Tools: &home.MCP{URL: endpoint}, Planner: lc}
+		hc = &home.Controller{Tools: &home.MCP{URL: endpoint}, Planner: lc, TrustVisibility: cfg.HomeTrustMCPVisibility, Direct: cfg.HomeDirectCommands, DefaultArea: cfg.HomeDefaultArea}
 		engine.Home = hc
 	}
 	if cfg.AssistantTools.Enabled {
@@ -282,6 +282,24 @@ func main() {
 	defer logs.Close()
 	proxy.Journal = logs
 	if cfg.Mode == "hybrid" {
+		// ivkaiv: keep the name index of direct commands fresh (see home/direct.go).
+		if hc != nil && (cfg.HomeDirectCommands || cfg.HomeDefaultArea != "") {
+			namesCtx, namesCancel := context.WithCancel(context.Background())
+			defer namesCancel()
+			go func() {
+				for {
+					ctx, cancel := context.WithTimeout(namesCtx, time.Minute)
+					err := hc.RefreshNames(ctx)
+					cancel()
+					slog.Info("home_names", "ready", err == nil)
+					select {
+					case <-namesCtx.Done():
+						return
+					case <-time.After(home.NameIndexTTL):
+					}
+				}
+			}()
+		}
 		if hc != nil && cfg.HomeWarmArea != "" {
 			warmCtx, warmCancel := context.WithCancel(context.Background())
 			defer warmCancel()
@@ -328,7 +346,7 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		state := engine.RoutingStatus()
-		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "airplay": airPlayHealth(airPlay), "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "routing_classifier_enabled": state.ClassifierEnabled, "routing_default_route": state.DefaultRoute, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid", "home_assistant_enabled": hc != nil && cfg.Mode == "hybrid", "mcp_servers_configured": mcpConfigured, "music_playback_enabled": musicQueue != nil, "speaker_subscriptions": subscriptions.Snapshot()})
+		data, _ := json.Marshal(map[string]any{"status": "ok", "mode": cfg.Mode, "airplay": airPlayHealth(airPlay), "client_frames": clientCount.Load(), "server_frames": serverCount.Load(), "routing_revision": state.Revision, "routing_rules": state.ActiveRules, "routing_classifier_enabled": state.ClassifierEnabled, "routing_default_route": state.DefaultRoute, "conversation_log_enabled": logs.Enabled(), "conversation_log_failures": logs.Failures(), "assistant_tools_enabled": cfg.AssistantTools.Enabled, "dialogue_context_enabled": cfg.DialogueContext.Enabled && cfg.Mode == "hybrid", "home_assistant_enabled": hc != nil && cfg.Mode == "hybrid", "mcp_servers_configured": mcpConfigured, "music_playback_enabled": musicQueue != nil, "speaker_subscriptions": subscriptions.Snapshot(), "home_default_area": cfg.HomeDefaultArea})
 		_, _ = w.Write(data)
 	})
 	mux.Handle("/uni.ws", proxy)
