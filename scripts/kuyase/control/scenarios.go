@@ -75,7 +75,8 @@ func scenario(ctx context.Context, base, fixtures, name string) error {
 	case "reset":
 		turns = []turn{first, {"reset", first.device, "Начинаем новый разговор.", false, counters{Voice: 1, TTS: 1}}, {"clean", first.device, "История очищена.", false, local}}
 	case "home":
-		turns = []turn{{"home", "home", "Готово: Свет в кабинете.", false, counters{Voice: 1, LLM: 1, TTS: 1, HomeWrites: 1, HomeReads: 3}}, {"state", "home", "Свет в кабинете включён.", false, counters{Voice: 1, LLM: 1, TTS: 1, HomeReads: 2}}}
+		// ivkaiv fork answers confirmed single turn_on with Alice's on chime (no TTS speech).
+		turns = []turn{{"home", "home", "", false, counters{Voice: 1, LLM: 1, TTS: 0, HomeWrites: 1, HomeReads: 3}}, {"state", "home", "Свет в кабинете включён.", false, counters{Voice: 1, LLM: 1, TTS: 1, HomeReads: 2}}}
 	case "failure":
 		turns = []turn{{"failure", "failure", "Сейчас не получилось получить ответ локальной модели.", false, local}, {"llm", "failure", first.answer, false, local}}
 	default:
