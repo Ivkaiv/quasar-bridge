@@ -15,6 +15,9 @@ type Request struct {
 	StreamID string `json:"stream_id,omitempty"`
 	Title    string `json:"title,omitempty"`
 	OffsetMS int64  `json:"offset_ms,omitzero"`
+	// ivkaiv: Instead plays the stored Sound in place of the spoken answer (a
+	// confirmed home command answers with a chime, not "Готово.").
+	Instead bool `json:"instead,omitempty"`
 }
 
 type PlaybackState struct {

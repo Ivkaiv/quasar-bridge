@@ -25,10 +25,14 @@ def check_elf(path, arch):
 
 
 def build(arch="arm64", output=None, binary=None, tag=None, upx=False,
-          pcm_armv7_binary=None, pcm_arm64_binary=None):
+          pcm_armv7_binary=None, pcm_arm64_binary=None, version_override=None):
     if tag is not None and not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
         raise ValueError("release tag must be vMAJOR.MINOR.PATCH")
     version = tag[1:] if tag else "dev"
+    if version_override is not None:
+        if tag is None or not re.fullmatch(re.escape(version) + r"-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*", version_override):
+            raise ValueError("custom version requires --tag and must use that base version with a nonempty suffix")
+        version = version_override
     output = Path(output or ROOT / f"dist/quasar-bridge-linux-{arch}.tar.gz").resolve()
     with tempfile.TemporaryDirectory(prefix="quasar-speaker-") as tmp:
         executable = Path(binary).resolve() if binary else Path(tmp) / "quasar-bridge"
@@ -103,8 +107,9 @@ if __name__ == "__main__":
     parser.add_argument("--pcm-armv7-binary", help="prebuilt ARMv7 PCM payload to embed; otherwise build it")
     parser.add_argument("--pcm-arm64-binary", help="prebuilt ARM64 PCM payload to embed; otherwise build it")
     parser.add_argument("--tag", help="stable release tag; otherwise build a dev archive")
+    parser.add_argument("--version", help="custom build version matching the --tag base, e.g. 0.7.4-ivkaiv.20261106")
     parser.add_argument("--upx", action="store_true",
                         help="compress with UPX -6 --no-lzma and verify before packaging")
     args = parser.parse_args()
     build(args.arch, args.output, args.binary, args.tag, args.upx,
-          args.pcm_armv7_binary, args.pcm_arm64_binary)
+          args.pcm_armv7_binary, args.pcm_arm64_binary, args.version)

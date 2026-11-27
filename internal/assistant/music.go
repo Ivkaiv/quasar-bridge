@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func musicDefinition() llm.Tool {
-	return definition("play_music", "Включить музыку на текущей колонке с публичного сайта или по прямой ссылке на аудио. source — точный URL страницы, сайта или аудиофайла из запроса пользователя. Если пользователь назвал конкретный трек, передай его точное название в title: будет выбран только один совпавший трек, без подбора замены. Без title сам находит аудиоссылки и ставит найденные MP3 в очередь. Не придумывай адреса файлов.", map[string]any{
+	return definition("play_music", "Включить музыку на текущей колонке с публичного сайта или по прямой ссылке на аудио. source — точный URL страницы, сайта или аудиофайла из запроса пользователя. Если пользователь назвал конкретный трек, передай его точное название в title: будет выбран только один совпавший трек, без подбора замены. Без title сам находит аудиоссылки и ставит найденные MP3 в очередь. Сайт «Зайцев нет» — https://zaycev.net/; чтобы включить конкретного исполнителя или песню с него, передай https://zaycev.net/search?query_search=<исполнитель и/или название в именительном падеже>. Не придумывай адреса файлов.", map[string]any{
 		"source": map[string]string{"type": "string"},
 		"title":  map[string]any{"type": "string", "minLength": 1, "maxLength": maxMusicTitleRunes},
 	}, []string{"source"})
@@ -38,11 +39,19 @@ func (t *Tools) playMusic(ctx context.Context, args string) (any, error) {
 	if !sound.HasPlayer(ctx) {
 		return nil, errors.New("play_music requires a current speaker request")
 	}
-	resolution, err := t.WebReader.ResolveMusic(ctx, raw)
-	if err != nil {
-		return nil, err
+	var tracks []WebLink
+	if u, parseErr := url.Parse(raw); parseErr == nil && zaycevSite(u) {
+		tracks, err = t.WebReader.zaycevTracks(ctx, u.String())
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		resolution, err := t.WebReader.ResolveMusic(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		tracks = resolution.Tracks
 	}
-	tracks := resolution.Tracks
 	if title != "" {
 		tracks, err = selectMusicTitle(tracks, title)
 		if err != nil {
