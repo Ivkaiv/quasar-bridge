@@ -244,6 +244,9 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 		defer cancel()
 		if *route != "" {
+			if hc != nil && (cfg.HomeDirectCommands || cfg.HomeDefaultArea != "") {
+				_ = hc.RefreshNames(ctx)
+			}
 			data, _ := json.Marshal(engine.Decide(ctx, *route))
 			fmt.Println(string(data))
 			return

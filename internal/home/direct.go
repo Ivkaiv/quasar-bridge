@@ -3,18 +3,22 @@ package home
 import (
 	"context"
 	"encoding/json/v2"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 )
 
-// ivkaiv: direct path for "включи/выключи <имя>". When the rest of the phrase is
-// exactly the name or an alias of one device, the command goes straight to HA:
-// no full inventory (~2.8 s) and no planner (~0.5 s). Anything else — rooms,
-// numbers, "всё", two matches, a near miss — falls back to the planner path.
+// ivkaiv: direct path for "включи/выключи <имя>" and "сделай/поставь <климат> <число>".
+// When the phrase unambiguously names one controllable device in HA, the command
+// goes straight to HA: no full inventory (~2.8 s) and no LLM planner (~1-2 s).
+// The same in-memory index also powers device-aware routing (HomeHint) so bare
+// song titles like "включи Батарейку" never get mistaken for smart-home devices.
 
 var directDomains = []string{"light", "switch", "fan", "media_player"}
+var indexDomains = []string{"light", "switch", "fan", "media_player", "climate", "cover", "vacuum"}
 
 // directCommand splits "Включи трек." into ("turn_on", "трек").
 func directCommand(text string) (service, name string, ok bool) {
@@ -42,6 +46,134 @@ func normName(s string) string {
 	return strings.Join(words, " ")
 }
 
+// setpointCommand parses commands like "сделай колонку 41", "поставь колонку на 42 градуса",
+// "сделай температуру в колонке 41", "поставь котёл 21.5".
+// Relative changes ("теплее на 2 градуса") return ok=false so the planner handles them.
+func setpointCommand(text string) (target string, temp float64, ok bool) {
+	s := strings.ReplaceAll(strings.ToLower(text), "ё", "е")
+	raw := strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != ','
+	})
+	for i := range raw {
+		raw[i] = strings.Trim(raw[i], ".,")
+	}
+	raw = slices.DeleteFunc(raw, func(w string) bool { return w == "" })
+	for len(raw) > 0 && (raw[0] == "алиса" || raw[0] == "пожалуйста") {
+		raw = raw[1:]
+	}
+	for len(raw) > 0 && raw[len(raw)-1] == "пожалуйста" {
+		raw = raw[:len(raw)-1]
+	}
+	if len(raw) < 3 {
+		return "", 0, false
+	}
+	switch raw[0] {
+	case "сделай", "поставь", "установи", "выстави", "задай":
+	default:
+		return "", 0, false
+	}
+	rest := raw[1:]
+	for _, w := range rest {
+		switch w {
+		case "теплее", "холоднее", "выше", "ниже", "больше", "меньше", "плюс", "минус", "прибавь", "убавь":
+			return "", 0, false
+		}
+	}
+	numIdx := -1
+	var parsed float64
+	for i, w := range rest {
+		clean := strings.Trim(w, ".,")
+		if clean == "" {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.ReplaceAll(clean, ",", "."), 64)
+		if err == nil {
+			if numIdx >= 0 {
+				return "", 0, false // multiple numbers -> ambiguous
+			}
+			numIdx = i
+			parsed = v
+		}
+	}
+	if numIdx < 0 || parsed < 5 || parsed > 85 {
+		return "", 0, false
+	}
+	var nameWords []string
+	for i, w := range rest {
+		if i == numIdx {
+			continue
+		}
+		nw := normName(w)
+		if nw == "" {
+			continue
+		}
+		// Skip filler/unit words around the target temperature.
+		if nw == "на" || nw == "до" || nw == "в" || nw == "во" || nw == "температур" ||
+			strings.HasPrefix(nw, "градус") || nw == "цельси" || nw == "c" || nw == "с" {
+			continue
+		}
+		nameWords = append(nameWords, nw)
+	}
+	target = strings.Join(nameWords, " ")
+	if target == "" {
+		return "", 0, false
+	}
+	return target, parsed, true
+}
+
+func matchSetpointEntity(text string, entities []Entity) (Plan, Entity, bool) {
+	target, temp, ok := setpointCommand(text)
+	if !ok {
+		return Plan{}, Entity{}, false
+	}
+	targetKey := roomKey(target)
+	var exact []Entity
+	seen := map[string]bool{}
+	for _, e := range entities {
+		if !strings.HasPrefix(e.ID, "climate.") || e.State == "unavailable" || e.State == "unknown" || seen[e.ID] {
+			continue
+		}
+		for _, n := range append([]string{e.Name}, e.Aliases...) {
+			if normName(n) == target || (targetKey != "" && roomKey(n) == targetKey) {
+				seen[e.ID] = true
+				exact = append(exact, e)
+				break
+			}
+		}
+	}
+	if len(exact) == 1 {
+		e := exact[0]
+		return Plan{Actions: []Action{{Domain: "climate", Service: "set_temperature", EntityID: e.ID, Data: map[string]any{"temperature": temp}}}}, e, true
+	}
+	// Fallback for "колонк"/"газов колонк"/"водонагревател" even if HA aliases were cleared:
+	// unambiguously prefer the single DHW / hot-water climate entity.
+	if len(exact) == 0 && (targetKey == "колонк" || targetKey == "газов колонк" || targetKey == "водонагревател" || targetKey == "вод" || targetKey == "горяч вод") {
+		var dhw []Entity
+		for _, e := range entities {
+			if !strings.HasPrefix(e.ID, "climate.") || e.State == "unavailable" || e.State == "unknown" {
+				continue
+			}
+			hay := strings.ToLower(e.ID + " " + e.Name + " " + strings.Join(e.Aliases, " "))
+			if strings.Contains(hay, "dhw") || strings.Contains(hay, "горяч") || strings.Contains(hay, "колонк") || strings.Contains(hay, "водонагрев") {
+				dhw = append(dhw, e)
+			}
+		}
+		if len(dhw) == 1 {
+			e := dhw[0]
+			return Plan{Actions: []Action{{Domain: "climate", Service: "set_temperature", EntityID: e.ID, Data: map[string]any{"temperature": temp}}}}, e, true
+		}
+	}
+	return Plan{}, Entity{}, false
+}
+
+func (c *Controller) directSetpointPlan(text string) (Plan, Entity, bool) {
+	entities, ok := c.names.allEntities()
+	if !ok {
+		return Plan{}, Entity{}, false
+	}
+	return matchSetpointEntity(text, entities)
+}
+
 // directPlan finds the single device the phrase names; ok=false means "not a
 // direct command" and the caller takes the planner path.
 // The in-memory index is consulted for every phrase: it holds only full device
@@ -54,10 +186,17 @@ func (c *Controller) directPlan(ctx context.Context, text string, live bool) (pl
 		return Plan{}, Entity{}, false
 	}
 	if match, ok := c.names.lookup(name); ok {
-		if len(match) != 1 {
+		var direct []Entity
+		for _, m := range match {
+			domain, _, _ := strings.Cut(m.ID, ".")
+			if slices.Contains(directDomains, domain) {
+				direct = append(direct, m)
+			}
+		}
+		if len(direct) != 1 {
 			return Plan{}, Entity{}, false
 		}
-		e = match[0]
+		e = direct[0]
 		domain, _, _ := strings.Cut(e.ID, ".")
 		return Plan{Actions: []Action{{Domain: domain, Service: service, EntityID: e.ID, Data: map[string]any{}}}}, e, true
 	}
@@ -105,16 +244,70 @@ func (c *Controller) directPlan(ctx context.Context, text string, live bool) (pl
 	return Plan{Actions: []Action{{Domain: domain, Service: service, EntityID: e.ID, Data: map[string]any{}}}}, e, true
 }
 
-// nameIndex keeps the direct-command devices by normalized name and alias, so a
+// genericHomeWords contains whole-word normalized (normName) smart-home nouns.
+// Whole-word comparison prevents false matches against song titles:
+// "батарейка" -> "батарейк" != "батаре"; "Светлана" -> "светлан" != "свет".
+var genericHomeWords = map[string]bool{
+	"свет": true, "освещени": true, "ламп": true, "лампочк": true, "люстр": true,
+	"подсветк": true, "светильник": true, "ночник": true, "бра": true, "торшер": true,
+	"лент": true, "гирлянд": true, "розетк": true, "выключател": true, "реле": true,
+	"рубильник": true, "штор": true, "жалюз": true, "карниз": true,
+	"кондиционер": true, "термостат": true, "обогревател": true, "обогрев": true,
+	"батаре": true, "радиатор": true, "вентилятор": true, "вытяжк": true,
+	"увлажнител": true, "очистител": true, "пылесос": true,
+	"телевизор": true, "приставк": true, "проектор": true, "тв": true, "tv": true,
+	"колонк": true, "котел": true, "котл": true, "отоплени": true,
+	"водонагревател": true, "бойлер": true, "горяч": true,
+	"датчик": true, "температур": true, "влажност": true, "климат": true, "трек": true,
+}
+
+// HomeHint checks whether text references any real controllable HA device,
+// alias, room, or generic smart-home device noun, and returns a compact
+// summary of known rooms and devices for the LLM router classifier.
+func (c *Controller) HomeHint(text string) (known bool, matches bool, summary string) {
+	entities, areas, summary, ok := c.names.snapshot()
+	if !ok {
+		return false, false, ""
+	}
+	normWords := strings.Fields(normName(text))
+	for _, w := range normWords {
+		if genericHomeWords[w] {
+			return true, true, summary
+		}
+	}
+	rWords := roomWords(text)
+	for _, area := range areas {
+		if aw := roomWords(area); len(aw) > 0 && wordSequence(rWords, aw) {
+			return true, true, summary
+		}
+	}
+	for _, e := range entities {
+		for _, n := range append([]string{e.Name}, e.Aliases...) {
+			nw := strings.Fields(normName(n))
+			if len(nw) == 0 || (len(nw) == 1 && len([]rune(nw[0])) < 2) {
+				continue
+			}
+			if wordSequence(normWords, nw) {
+				return true, true, summary
+			}
+		}
+	}
+	return true, false, summary
+}
+
+// nameIndex keeps the controllable HA devices by normalized name and alias, so a
 // hit needs no ha-mcp search (~1 s). RefreshNames rebuilds it in the background
 // (main.go, every NameIndexTTL); an index older than 3×TTL is ignored and the
 // live search above is used, as before the first build.
 const NameIndexTTL = 5 * time.Minute
 
 type nameIndex struct {
-	mu     sync.Mutex
-	byName map[string][]Entity
-	built  time.Time
+	mu       sync.Mutex
+	byName   map[string][]Entity
+	entities []Entity
+	areaList []string
+	summary  string
+	built    time.Time
 }
 
 func (x *nameIndex) lookup(name string) ([]Entity, bool) {
@@ -126,6 +319,24 @@ func (x *nameIndex) lookup(name string) ([]Entity, bool) {
 	return x.byName[name], true
 }
 
+func (x *nameIndex) allEntities() ([]Entity, bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.byName == nil || time.Since(x.built) > 3*NameIndexTTL {
+		return nil, false
+	}
+	return x.entities, true
+}
+
+func (x *nameIndex) snapshot() (entities []Entity, areas []string, summary string, ok bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.byName == nil || time.Since(x.built) > 3*NameIndexTTL {
+		return nil, nil, "", false
+	}
+	return x.entities, x.areaList, x.summary, true
+}
+
 // Room names are hints for recognizing explicit rooms, never permission to use stale entities.
 func (x *nameIndex) areas() []string {
 	x.mu.Lock()
@@ -133,27 +344,91 @@ func (x *nameIndex) areas() []string {
 	if x.byName == nil || time.Since(x.built) > 3*NameIndexTTL {
 		return nil
 	}
-	areas := []string{}
-	seen := map[string]bool{}
-	for _, entities := range x.byName {
-		for _, e := range entities {
-			if e.Area != "" && !seen[e.Area] {
-				seen[e.Area] = true
-				areas = append(areas, e.Area)
-			}
-		}
-	}
-	return areas
+	return slices.Clone(x.areaList)
 }
 
-// RefreshNames rereads names and aliases of the direct-command devices.
+func buildCatalogSummary(entities []Entity, areas []string) string {
+	const maxRunes = 900
+	var b strings.Builder
+	runeCount := 0
+	appendStr := func(s string) bool {
+		s = strings.ToValidUTF8(s, "")
+		n := len([]rune(s))
+		if runeCount+n > maxRunes {
+			return false
+		}
+		b.WriteString(s)
+		runeCount += n
+		return true
+	}
+	if len(areas) > 0 {
+		if appendStr("Комнаты: ") {
+			for i, a := range areas {
+				sep := ""
+				if i > 0 {
+					sep = ", "
+				}
+				if !appendStr(sep + a) {
+					break
+				}
+			}
+			appendStr(". ")
+		}
+	}
+	var devs []string
+	seen := map[string]bool{}
+	for _, e := range entities {
+		name := strings.TrimSpace(e.Name)
+		if name == "" && len(e.Aliases) == 0 {
+			continue
+		}
+		label := name
+		if len(e.Aliases) > 0 {
+			if label != "" {
+				label += " (" + strings.Join(e.Aliases, ", ") + ")"
+			} else {
+				label = strings.Join(e.Aliases, ", ")
+			}
+		}
+		if !seen[label] {
+			seen[label] = true
+			devs = append(devs, label)
+		}
+	}
+	if len(devs) > 0 && appendStr("Устройства: ") {
+		for i, d := range devs {
+			sep := ""
+			if i > 0 {
+				sep = ", "
+			}
+			if !appendStr(sep + d) {
+				break
+			}
+		}
+		appendStr(".")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// RefreshNames rereads names and aliases of controllable smart-home devices.
 func (c *Controller) RefreshNames(ctx context.Context) error {
-	entities, err := (&Controller{Tools: c.Tools, Domains: directDomains}).Entities(ctx)
+	entities, err := (&Controller{Tools: c.Tools, Domains: indexDomains}).Entities(ctx)
 	if err != nil {
 		return err // keep the old index
 	}
+	c.setNameIndex(entities)
+	return nil
+}
+
+func (c *Controller) setNameIndex(entities []Entity) {
 	byName := map[string][]Entity{}
+	var areas []string
+	seenArea := map[string]bool{}
 	for _, e := range entities {
+		if a := strings.TrimSpace(e.Area); a != "" && !seenArea[a] {
+			seenArea[a] = true
+			areas = append(areas, a)
+		}
 		seen := map[string]bool{}
 		for _, n := range append([]string{e.Name}, e.Aliases...) {
 			if k := normName(n); k != "" && !seen[k] {
@@ -162,8 +437,14 @@ func (c *Controller) RefreshNames(ctx context.Context) error {
 			}
 		}
 	}
+	slices.Sort(areas)
+	copied := slices.Clone(entities)
+	summary := buildCatalogSummary(copied, areas)
 	c.names.mu.Lock()
 	defer c.names.mu.Unlock()
-	c.names.byName, c.names.built = byName, time.Now()
-	return nil
+	c.names.byName = byName
+	c.names.entities = copied
+	c.names.areaList = areas
+	c.names.summary = summary
+	c.names.built = time.Now()
 }
